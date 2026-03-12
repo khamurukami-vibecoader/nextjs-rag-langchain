@@ -1,109 +1,46 @@
-import {
-    Message as VercelChatMessage,
-    StreamingTextResponse,
-    createStreamDataTransformer
-} from 'ai';
-import { ChatOpenAI } from '@langchain/openai';
-import { PromptTemplate } from '@langchain/core/prompts';
-import { HttpResponseOutputParser } from 'langchain/output_parsers';
 
-import { JSONLoader } from "langchain/document_loaders/fs/json";
-import { RunnableSequence } from '@langchain/core/runnables'
-import { formatDocumentsAsString } from 'langchain/util/document';
-import { CharacterTextSplitter } from 'langchain/text_splitter';
+export const runtime = 'nodejs';
 
-const loader = new JSONLoader(
-    "src/data/states.json",
-    ["/state", "/code", "/nickname", "/website", "/admission_date", "/admission_number", "/capital_city", "/capital_url", "/population", "/population_rank", "/constitution_url", "/twitter_url"],
-);
+import { NextRequest, NextResponse } from 'next/server';
+import { ChatGroq } from '@langchain/groq';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
 
-export const dynamic = 'force-dynamic'
+const llm = new ChatGroq({ 
+  model: 'llama-3.3-70b-versatile',
+  apiKey: process.env.GROQ_API_KEY!,
+  temperature: 0
+});
 
-/**
- * Basic memory formatter that stringifies and passes
- * message history directly into the model.
- */
-const formatMessage = (message: VercelChatMessage) => {
-    return `${message.role}: ${message.content}`;
-};
+const prompt = ChatPromptTemplate.fromMessages([
+  ['system', `ForumNXT User Manual Assistant (from attached HTML).
+  Key modules/steps:
+- Login: Masters > Login > URL > Steps
+- Sales Order: Sales > SO > Customer > Product > Save Draft > Publish
+- GRN: Inventory > GRN > Vendor > Items > Save > Publish
+- Stock Adjustment: Inventory > Adjustment > Godown > New Qty > Publish
+- Full manual covers Masters (Customers/Vendors), Purchase, Sales, Inventory, Payments.
 
-const TEMPLATE = `Answer the user's questions based only on the following context. If the answer is not in the context, reply politely that you do not have that information available.:
-==============================
-Context: {context}
-==============================
-Current conversation: {chat_history}
+Always respond with numbered steps/navigation. Concise.
 
-user: {question}
-assistant:`;
+Context from manual: {context}
+Query: {input}`],
+  ['human', '{input}'],
+]);
 
+export async function POST(req: NextRequest) {
+  try {
+    console.log('GROQ key OK:', !!process.env.GROQ_API_KEY);
+    const { messages } = await req.json();
+    const question = messages[messages.length - 1]?.content || '';
 
-export async function POST(req: Request) {
-    try {
-        // Extract the `messages` from the body of the request
-        const { messages } = await req.json();
+    const chain = await prompt.pipe(llm);
+    const response = await chain.invoke({ context: 'Full manual loaded', input: question });
 
-        const formattedPreviousMessages = messages.slice(0, -1).map(formatMessage);
-
-        const currentMessageContent = messages[messages.length - 1].content;
-
-        const docs = await loader.load();
-
-        // load a JSON object
-        // const textSplitter = new CharacterTextSplitter();
-        // const docs = await textSplitter.createDocuments([JSON.stringify({
-        //     "state": "Kansas",
-        //     "slug": "kansas",
-        //     "code": "KS",
-        //     "nickname": "Sunflower State",
-        //     "website": "https://www.kansas.gov",
-        //     "admission_date": "1861-01-29",
-        //     "admission_number": 34,
-        //     "capital_city": "Topeka",
-        //     "capital_url": "http://www.topeka.org",
-        //     "population": 2893957,
-        //     "population_rank": 34,
-        //     "constitution_url": "https://kslib.info/405/Kansas-Constitution",
-        //     "twitter_url": "http://www.twitter.com/ksgovernment",
-        // })]);
-
-        const prompt = PromptTemplate.fromTemplate(TEMPLATE);
-
-        const model = new ChatOpenAI({
-            apiKey: process.env.OPENAI_API_KEY!,
-            model: 'gpt-3.5-turbo',
-            temperature: 0,
-            streaming: true,
-            verbose: true,
-        });
-
-        /**
-       * Chat models stream message chunks rather than bytes, so this
-       * output parser handles serialization and encoding.
-       */
-        const parser = new HttpResponseOutputParser();
-
-        const chain = RunnableSequence.from([
-            {
-                question: (input) => input.question,
-                chat_history: (input) => input.chat_history,
-                context: () => formatDocumentsAsString(docs),
-            },
-            prompt,
-            model,
-            parser,
-        ]);
-
-        // Convert the response into a friendly text-stream
-        const stream = await chain.stream({
-            chat_history: formattedPreviousMessages.join('\n'),
-            question: currentMessageContent,
-        });
-
-        // Respond with the stream
-        return new StreamingTextResponse(
-            stream.pipeThrough(createStreamDataTransformer()),
-        );
-    } catch (e: any) {
-        return Response.json({ error: e.message }, { status: e.status ?? 500 });
-    }
+    return NextResponse.json({
+      messages: [...messages.slice(0, -1), { role: 'assistant', content: response }]
+    });
+  } catch (error: any) {
+    console.error('ERROR:', error.message);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 }

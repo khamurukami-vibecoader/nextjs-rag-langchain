@@ -1,26 +1,26 @@
-import OpenAI from 'openai';
-import { OpenAIStream, StreamingTextResponse } from 'ai';
 
-export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs';
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY!,
-});
+import { NextRequest, NextResponse } from 'next/server';
 
-export async function POST(req: Request) {
-    // Extract the `messages` from the body of the request
-    const { messages } = await req.json();
+export async function POST(req: NextRequest) {
+  console.log('=== API HIT ===');
+  console.log('GROQ_KEY exists:', !!process.env.GROQ_API_KEY);
+  console.log('KEY preview:', process.env.GROQ_API_KEY?.slice(0,10) + '...');
+  console.log('Req body:', await req.text());
 
-    // Request the OpenAI API for the response based on the prompt
-    const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        stream: true,
-        messages: messages,
-    });
+  const body = await req.json().catch(() => ({}));
+  console.log('Parsed messages:', body.messages);
 
-    // Convert the response into a friendly text-stream
-    const stream = OpenAIStream(response);
+  if (!process.env.GROQ_API_KEY) {
+    console.error('NO GROQ KEY!');
+    return NextResponse.json({ error: 'Missing GROQ_API_KEY in .env.local' }, { status: 400 });
+  }
 
-    // Respond with the stream
-    return new StreamingTextResponse(stream);
+  return NextResponse.json({ 
+    status: 'OK', 
+    keyOK: true, 
+    groqPreview: process.env.GROQ_API_KEY?.slice(0,20),
+    received: body.messages?.length || 0 
+  });
 }
